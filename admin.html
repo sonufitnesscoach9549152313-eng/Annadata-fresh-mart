@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Admin — Annadata Fresh Mart</title>
+<link rel="icon" href="assets/logo-badge.png">
+<style>
+:root{--deep:#1F4D2B;--fresh:#2F7D3A;--gold:#D9922E;--cream:#FAF6EC;--line:#E3DCC8;--muted:#5B6B57}
+*{box-sizing:border-box}body{margin:0;background:var(--cream);font-family:Mukta,system-ui,sans-serif;color:#1E2A1F;font-size:16px}
+header{background:var(--deep);color:var(--cream);padding:12px 18px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+header img{height:38px;background:var(--cream);border-radius:8px;padding:3px}
+main{width:min(100% - 24px,1100px);margin:18px auto 60px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.tabs button,.btn{border:1.5px solid var(--deep);background:#fff;color:var(--deep);border-radius:999px;padding:8px 16px;font:inherit;font-weight:700;cursor:pointer}
+.tabs button[aria-selected=true],.btn.p{background:var(--deep);color:var(--cream)}
+.btn.g{background:var(--gold);border-color:var(--gold)}.btn.r{border-color:#B91C1C;color:#B91C1C}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center}
+.sub{color:var(--muted);font-size:14px}.b{font-weight:800}
+.badge{font-size:13px;font-weight:700;padding:2px 10px;border-radius:999px;background:#E8F2E0;color:var(--deep)}
+.badge.pending,.badge.placed{background:#FFF0D9;color:#8A5A12}.badge.cancelled,.badge.rejected{background:#FDE2E2;color:#991B1B}
+input,select{font:inherit;padding:8px 10px;border:1.5px solid var(--line);border-radius:10px;background:#fff}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden}
+td,th{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left}
+.err{color:#B91C1C;font-weight:600}
+.login{max-width:420px;margin:40px auto}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.stat b{font-size:24px;color:var(--deep);display:block}
+</style>
+</head>
+<body>
+<header><img src="assets/logo-h.png" alt="Annadata Fresh Mart"><span id="who"></span></header>
+<main id="app"><p>Loading…</p></main>
+<script src="assets/supabase.js"></script>
+<script>
+const SB_URL="https://kyquhiktnjoeucafrjly.supabase.co", SB_KEY="sb_publishable_yjrho_YDkRrAyENklcn_bw_DlH2RDB_";
+const sb = supabase.createClient(SB_URL, SB_KEY);
+const $=s=>document.querySelector(s), app=$("#app");
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const dt=s=>new Date(s).toLocaleString("en-IN",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"});
+const ST={placed:"Order mila",confirmed:"Pakka",out_for_delivery:"Raste mein",delivered:"Pahunch gaya",cancelled:"Radd"};
+let tab="requests", filter="active", email="", stage="start";
+
+function loginView(err){
+  app.innerHTML=`<div class="login card"><h2>Admin login</h2>
+  <p class="sub">Sirf admin account se login karein.</p>
+  <p><input id="em" type="email" placeholder="email" style="width:100%" value="${esc(email)}" ${stage==="code"?"readonly":""}></p>
+  ${stage==="code"?`<p><input id="code" inputmode="numeric" maxlength="6" placeholder="6-digit code" style="width:100%"></p><button class="btn p" id="ver">Verify</button>`:`<button class="btn p" id="send">Code bhejo</button>`}
+  <p class="err">${err?esc(err):""}</p></div>`;
+}
+async function send(){email=$("#em").value.trim();const{error}=await sb.auth.signInWithOtp({email,options:{shouldCreateUser:false,emailRedirectTo:location.href}});if(error)return loginView(error.message);stage="code";loginView()}
+async function ver(){const{error}=await sb.auth.verifyOtp({email,token:$("#code").value.trim(),type:"email"});if(error)loginView(error.message)}
+
+async function render(){
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session){$("#who").textContent="";return loginView()}
+  const {data:isAdmin}=await sb.rpc("is_admin");
+  $("#who").innerHTML=`${esc(session.user.email||session.user.phone)} <button class="btn" id="out" style="padding:4px 12px">Logout</button>`;
+  if(!isAdmin){app.innerHTML=`<div class="card">Ye account admin nahi hai.</div>`;return}
+  app.innerHTML=`<div class="tabs" role="tablist">
+    ${[["requests","Membership payments"],["orders","Orders"],["prices","Sabzi rate"]].map(([k,l])=>`<button role="tab" data-tab="${k}" aria-selected="${tab===k}">${l}</button>`).join("")}
+  </div><div id="pane">Loading…</div>`;
+  if(tab==="requests")return requests(); if(tab==="orders")return orders(); return prices();
+}
+async function profilesMap(ids){
+  if(!ids.length)return{};
+  const{data}=await sb.from("profiles").select("id,full_name,phone").in("id",[...new Set(ids)]);
+  return Object.fromEntries((data||[]).map(p=>[p.id,p]));
+}
+async function requests(){
+  const{data}=await sb.from("membership_requests").select("*").order("created_at",{ascending:false}).limit(100);
+  const pm=await profilesMap((data||[]).map(r=>r.user_id));
+  const pending=(data||[]).filter(r=>r.status==="pending");
+  $("#pane").innerHTML=`<p class="sub">Bank/UPI app mein UTR number se payment milao, phir Approve dabao. Approve karte hi customer ke balance mein credit jud jayega.</p>
+  <h3>Pending (${pending.length})</h3>
+  ${(data||[]).map(r=>{const p=pm[r.user_id]||{};return`<div class="card"><div class="row"><span class="b">${esc(p.full_name||"—")} · ${esc(p.phone||"")}</span><span class="badge ${r.status}">${r.status}</span></div>
+   <div>Plan: <b>${r.plan}</b> · Paid: <b>₹${r.amount}</b> → Credit: <b>₹${r.credit}</b></div>
+   <div>UTR: <b>${esc(r.upi_ref)}</b> <span class="sub">· ${dt(r.created_at)}</span></div>
+   ${r.status==="pending"?`<div class="row" style="justify-content:flex-start;margin-top:8px"><button class="btn g" data-appr="${r.id}">Approve ₹${r.credit}</button><button class="btn r" data-rej="${r.id}">Reject</button></div>`:""}</div>`}).join("")||"<p>Koi request nahi.</p>"}`;
+}
+async function orders(){
+  let q=sb.from("orders").select("*").order("created_at",{ascending:false}).limit(150);
+  if(filter==="active")q=q.in("status",["placed","confirmed","out_for_delivery"]);
+  const{data}=await q;
+  const list=data||[], tot=list.reduce((a,o)=>a+(o.status!=="cancelled"?o.total:0),0);
+  $("#pane").innerHTML=`<div class="stats"><div class="stat"><span class="sub">Orders</span><b>${list.length}</b></div><div class="stat"><span class="sub">Value</span><b>₹${tot.toLocaleString("en-IN")}</b></div>
+   <div class="stat"><span class="sub">Morning slot</span><b>${list.filter(o=>/6–8 AM|सुबह|Morning/.test(o.slot)).length}</b></div><div class="stat"><span class="sub">Evening slot</span><b>${list.filter(o=>/PM|शाम|Evening/.test(o.slot)).length}</b></div></div>
+  <p><select id="flt"><option value="active" ${filter==="active"?"selected":""}>Chal rahe orders</option><option value="all" ${filter==="all"?"selected":""}>Sab orders</option></select></p>
+  ${list.map(o=>`<div class="card"><div class="row"><span class="b">#${o.id} · ₹${o.total} · ${o.pay_method==="wallet"?"Balance se":o.pay_method==="cod"?"Delivery pe":"UPI"}</span><span class="badge ${o.status}">${ST[o.status]}</span></div>
+   <div>${o.items.map(i=>`${esc(i.name)} × ${i.qty} kg`).join(", ")}${o.has_kit?" · 🎁 Recipe kit bhejni hai":""}</div>
+   <div class="sub">${esc(o.name)} · <a href="https://wa.me/91${esc(o.phone)}" target="_blank" rel="noopener">${esc(o.phone)}</a> · ${esc(o.address)}${o.landmark?", "+esc(o.landmark):""} · ${esc(o.slot)} · ${o.zone==="near"?"2 km ke andar":"Sikar"} · ${dt(o.created_at)}</div>
+   ${o.status!=="cancelled"?`<div class="row" style="justify-content:flex-start;margin-top:8px"><select data-st="${o.id}">${Object.entries(ST).map(([k,v])=>`<option value="${k}" ${k===o.status?"selected":""}>${v}</option>`).join("")}</select>
+   <span class="sub">${o.pay_method==="wallet"?"Radd karne pe balance apne aap wapas":""}</span></div>`:""}</div>`).join("")||"<p>Koi order nahi.</p>"}`;
+}
+async function prices(){
+  const{data}=await sb.from("products").select("*").order("sort");
+  $("#pane").innerHTML=`<p class="sub">Rate badlo aur Save dabao. Website pe turant dikhega.</p><table><tr><th>Sabzi</th><th>Rate ₹/kg</th><th>MRP ₹</th><th>Dikhana</th><th></th></tr>
+  ${(data||[]).map(p=>`<tr><td>${esc(p.name_hi)}<br><span class="sub">${esc(p.name_en)}</span></td><td><input type="number" min="1" id="pr_${p.id}" value="${p.price}" style="width:90px"></td><td><input type="number" min="1" id="mr_${p.id}" value="${p.mrp}" style="width:90px"></td><td><input type="checkbox" id="ac_${p.id}" ${p.active?"checked":""}></td><td><button class="btn p" data-save="${p.id}">Save</button></td></tr>`).join("")}</table><p class="err" id="perr"></p>`;
+}
+document.addEventListener("click",async e=>{
+  const el=e.target;
+  if(el.id==="send")send(); if(el.id==="ver")ver();
+  if(el.id==="out"){await sb.auth.signOut();render()}
+  if(el.dataset.tab){tab=el.dataset.tab;render()}
+  if(el.dataset.appr&&confirm("Payment mil gaya? Balance jod dein?")){const{error}=await sb.rpc("admin_decide_membership",{p_id:+el.dataset.appr,p_approve:true});if(error)alert(error.message);requests()}
+  if(el.dataset.rej&&confirm("Reject karein?")){const{error}=await sb.rpc("admin_decide_membership",{p_id:+el.dataset.rej,p_approve:false});if(error)alert(error.message);requests()}
+  if(el.dataset.save){const id=el.dataset.save,price=+$("#pr_"+id).value,mrp=+$("#mr_"+id).value;
+    if(!(price>0)||mrp<price){$("#perr").textContent="MRP rate se kam nahi ho sakta.";return}
+    const{error}=await sb.from("products").update({price,mrp,active:$("#ac_"+id).checked}).eq("id",id);$("#perr").textContent=error?error.message:"Saved ✓"}
+});
+document.addEventListener("change",async e=>{
+  if(e.target.id==="flt"){filter=e.target.value;orders()}
+  if(e.target.dataset.st){const s=e.target.value;if(s==="cancelled"&&!confirm("Order radd karein?"))return orders();
+    const{error}=await sb.rpc("admin_set_order_status",{p_id:+e.target.dataset.st,p_status:s});if(error)alert(error.message);orders()}
+});
+sb.auth.onAuthStateChange(()=>render());
+render();
+</script>
+</body>
+</html>
